@@ -1,0 +1,967 @@
+# Pillow Escape: builds an installable IPA from Dopamine's MIT-licensed UI (Objective-C) with a cosmetic backend.
+# Paste this file as .github/workflows/build.yml in any GitHub repo, push, then grab the IPA from the run's Artifacts.
+# The jailbreak side of Dopamine (exploits, bootstrapper, libjailbreak) is NOT used: it is replaced by stand-ins that do nothing to the device.
+name: Build Pillow Escape IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  DOPAMINE_REF: 5b1d2c1c3bf54dd8e3641d29c60cd3a0c13cde88
+  P: ${{ github.workspace }}/PillowEscape
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Fetch Dopamine UI (MIT, pinned commit)
+        run: |
+          set -euo pipefail
+          mkdir -p src/dopamine && cd src/dopamine
+          git init -q
+          git remote add origin https://github.com/opa334/Dopamine.git
+          git fetch -q --depth 1 origin "$DOPAMINE_REF"
+          git checkout -q FETCH_HEAD
+          git log -1 --format='Dopamine %h %ci'
+
+      - name: Assemble UI sources
+        run: |
+          set -euo pipefail
+          D="$GITHUB_WORKSPACE/src/dopamine/Application"
+          mkdir -p "$P/Sources/Real/Backend" "$P/Sources/Fake" "$P/Sources/Shim/libjailbreak" "$P/Resources/en.lproj" "$P/Frameworks"
+          cp -R "$D/Dopamine/UI" "$P/Sources/Real/UI"
+          cp -R "$D/Dopamine/App Delegates" "$P/Sources/Real/AppDelegates"
+          cp -R "$D/Dopamine/Extensions" "$P/Sources/Real/Extensions"
+          for f in DOEnvironmentManager.h DOBootstrapper.h DOExploit.h DOExploitManager.h DOPreferenceManager.h DOPreferenceManager.m; do
+            cp "$D/Dopamine/Jailbreak/$f" "$P/Sources/Real/Backend/$f"
+          done
+          cp -R "$D/Dopamine/Assets.xcassets" "$P/Assets.xcassets"
+          cp "$D/Dopamine/en.lproj/Localizable.strings" "$P/Resources/en.lproj/"
+          cp "$D/Dopamine/Resources/"LICENSE*.md "$P/Resources/"
+          cp -R "$D/Frameworks/Preferences.framework" "$P/Frameworks/"
+          find "$P/Sources" -type f | wc -l
+
+      - name: Write backend stand-ins (no exploit code)
+        run: |
+          set -euo pipefail
+          cat > "$P/Sources/Fake/main.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Entry point. Same shape as Dopamine's main.m minus the jailbreak/TrollStore argv handling.
+          #import <UIKit/UIKit.h>
+          #import "DOAppDelegate.h"
+
+          int main(int argc, char *argv[])
+          {
+              NSString *appDelegateClassName;
+              @autoreleasepool {
+                  appDelegateClassName = NSStringFromClass([DOAppDelegate class]);
+              }
+              return UIApplicationMain(argc, argv, nil, appDelegateClassName);
+          }
+          PE_EOF
+          cat > "$P/Sources/Fake/PEShim.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Settings-store behind the jbclient shim. Values persist in NSUserDefaults, nothing leaves the app.
+          #import <Foundation/Foundation.h>
+          #import <libjailbreak/jbclient_xpc.h>
+
+          static NSString *pe_key(const char *key)
+          {
+              return [@"pe.jbs." stringByAppendingString:[NSString stringWithUTF8String:key ?: ""]];
+          }
+
+          bool jbclient_jbsettings_get_bool(const char *key)
+          {
+              return [[NSUserDefaults standardUserDefaults] boolForKey:pe_key(key)];
+          }
+
+          double jbclient_jbsettings_get_double(const char *key)
+          {
+              NSNumber *value = [[NSUserDefaults standardUserDefaults] objectForKey:pe_key(key)];
+              return value ? value.doubleValue : 3.0;
+          }
+
+          int jbclient_platform_jbsettings_set_bool(const char *key, bool value)
+          {
+              [[NSUserDefaults standardUserDefaults] setBool:value forKey:pe_key(key)];
+              return 0;
+          }
+
+          int jbclient_platform_jbsettings_set_double(const char *key, double value)
+          {
+              [[NSUserDefaults standardUserDefaults] setDouble:value forKey:pe_key(key)];
+              return 0;
+          }
+          PE_EOF
+          cat > "$P/Sources/Fake/DOJailbreaker.h" <<'PE_EOF'
+          // Objective-C, iOS 15+. Same interface DOMainViewController expects from Dopamine's DOJailbreaker, minus the xpc import.
+          #import <Foundation/Foundation.h>
+
+          NS_ASSUME_NONNULL_BEGIN
+
+          @interface DOJailbreaker : NSObject
+
+          - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL *)didRemove showLogs:(BOOL *)showLogs;
+          - (void)finalize;
+
+          - (BOOL)contiguousMappingWorkaroundNeeded;
+          - (void)applyContiguousMappingWorkaround;
+
+          @end
+
+          NS_ASSUME_NONNULL_END
+          PE_EOF
+          cat > "$P/Sources/Fake/DOJailbreaker.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Stand-in for Dopamine's DOJailbreaker. Plays a timed log through DOUIManager, then flips the per-boot flag.
+          #import "DOJailbreaker.h"
+          #import "DOEnvironmentManager.h"
+          #import "DOExploitManager.h"
+          #import "DOPreferenceManager.h"
+          #import "DOUIManager.h"
+
+          static void pe_step(NSString *line, NSTimeInterval seconds)
+          {
+              [[DOUIManager sharedInstance] sendLog:line debug:NO];
+              [NSThread sleepForTimeInterval:seconds];
+          }
+
+          static void pe_debug(NSString *line)
+          {
+              [[DOUIManager sharedInstance] sendLog:line debug:YES];
+          }
+
+          @implementation DOJailbreaker
+
+          - (BOOL)contiguousMappingWorkaroundNeeded { return NO; }
+          - (void)applyContiguousMappingWorkaround {}
+
+          - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL *)didRemove showLogs:(BOOL *)showLogs
+          {
+              DOEnvironmentManager *env = [DOEnvironmentManager sharedManager];
+              DOExploitManager *exploits = [DOExploitManager sharedManager];
+              DOPreferenceManager *prefs = [DOPreferenceManager sharedManager];
+
+              if ([prefs boolPreferenceValueForKey:@"removeJailbreakEnabled" fallback:NO]) {
+                  pe_step(DOLocalizedString(@"Removing Jailbreak"), 1.6);
+                  pe_step(DOLocalizedString(@"Rebuilding Icon Cache"), 1.4);
+                  [env deleteBootstrap];
+                  [prefs setPreferenceValue:@NO forKey:@"removeJailbreakEnabled"];
+                  *didRemove = YES;
+                  return;
+              }
+
+              pe_step(DOLocalizedString(@"Patchfinding"), 1.2);
+              pe_debug(@"[pf] scanning kernelcache __TEXT_EXEC");
+
+              pe_step([NSString stringWithFormat:DOLocalizedString(@"Exploiting Kernel (%@)"), exploits.selectedKernelExploit.name], 2.4);
+              pe_debug(@"[kexploit] primitive stable");
+
+              if (env.isArm64e) {
+                  pe_step([NSString stringWithFormat:DOLocalizedString(@"Bypassing PAC (%@)"), exploits.selectedPACBypass.name], 1.5);
+                  pe_step([NSString stringWithFormat:DOLocalizedString(@"Bypassing PPL (%@)"), exploits.selectedPPLBypass.name], 1.5);
+              }
+
+              pe_step(@"Escaping Sandbox (eternal_export)", 1.4);
+              pe_step(DOLocalizedString(@"Building Phys R/W Primitive"), 1.6);
+              pe_step(DOLocalizedString(@"Cleaning Up Exploits"), 0.9);
+              pe_step(DOLocalizedString(@"Elevating Privileges"), 1.3);
+              pe_step(DOLocalizedString(@"Loading BaseBin TrustCache"), 1.1);
+              pe_step(DOLocalizedString(@"Initializing Environment"), 1.4);
+              pe_step(DOLocalizedString(@"Initializing Protection"), 1.0);
+              pe_step(DOLocalizedString(@"Applying Bind Mount"), 1.0);
+              pe_step(@"Making System Pillowfull", 1.7);
+
+              NSMutableArray<NSString *> *managerNames = [NSMutableArray new];
+              for (NSDictionary *manager in [[DOUIManager sharedInstance] enabledPackageManagers]) {
+                  [managerNames addObject:manager[@"Display Name"]];
+              }
+              if (managerNames.count > 0) {
+                  pe_step([NSString stringWithFormat:@"Installing %@", [managerNames componentsJoinedByString:@", "]], 2.0);
+              }
+
+              pe_step(DOLocalizedString(@"Checking For Duplicate Apps"), 0.9);
+
+              [env setJailbroken:YES withVersion:[env appVersion]];
+              pe_step(DOLocalizedString(@"Rebooting Userspace"), 0.6);
+          }
+
+          - (void)finalize
+          {
+              [[DOEnvironmentManager sharedManager] rebootUserspace];
+          }
+
+          @end
+          PE_EOF
+          cat > "$P/Sources/Fake/DOEnvironmentManager.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Stand-in for Dopamine's DOEnvironmentManager. Tracks a "jailbroken" flag per boot, touches nothing on the system.
+          #import "DOEnvironmentManager.h"
+          #import "DOPreferenceManager.h"
+          #import <UIKit/UIKit.h>
+          #import <sys/sysctl.h>
+          #import <mach/machine.h>
+
+          static NSString *const kBootTimeKey = @"pe.jailbrokenBootTime";
+          static NSString *const kBootstrappedKey = @"pe.bootstrapped";
+
+          static long pe_boot_time(void)
+          {
+              struct timeval bootTime;
+              size_t size = sizeof(bootTime);
+              int mib[2] = { CTL_KERN, KERN_BOOTTIME };
+              if (sysctl(mib, 2, &bootTime, &size, NULL, 0) != 0) return 0;
+              return (long)bootTime.tv_sec;
+          }
+
+          static UIWindow *sBlackout;
+
+          // Full-screen black window, then hand control to `after`. Mimics the screen going dark during a userspace reboot.
+          static void pe_blackout(NSTimeInterval seconds, void (^after)(void))
+          {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  UIWindowScene *scene = (UIWindowScene *)[[[UIApplication sharedApplication] connectedScenes] anyObject];
+                  if (!sBlackout) {
+                      sBlackout = scene ? [[UIWindow alloc] initWithWindowScene:scene] : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+                      sBlackout.windowLevel = UIWindowLevelAlert + 100;
+                      sBlackout.backgroundColor = [UIColor blackColor];
+                      sBlackout.rootViewController = [[UIViewController alloc] init];
+                  }
+                  sBlackout.alpha = 0;
+                  sBlackout.hidden = NO;
+                  [UIView animateWithDuration:0.4 animations:^{ sBlackout.alpha = 1; }];
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                      after();
+                  });
+              });
+          }
+
+          static void pe_blackout_and_exit(NSTimeInterval seconds)
+          {
+              pe_blackout(seconds, ^{ exit(0); });
+          }
+
+          @implementation DOEnvironmentManager
+
+          + (instancetype)sharedManager
+          {
+              static DOEnvironmentManager *manager;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  manager = [[DOEnvironmentManager alloc] init];
+              });
+              return manager;
+          }
+
+          #pragma mark - Versions
+
+          - (NSString *)appVersion
+          {
+              return [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"1.0";
+          }
+
+          - (NSString *)appVersionDisplayString { return [self appVersion]; }
+          - (NSString *)nightlyHash { return @""; }
+          - (NSString *)systemVersion { return [[UIDevice currentDevice] systemVersion]; }
+
+          #pragma mark - Paths
+
+          - (NSString *)privatePrebootPath { return @"/private/preboot/pe"; }
+          - (NSString *)activePrebootPath { return @"/private/preboot/pe"; }
+          - (NSString *)accessibleKernelPath { return @""; }
+          - (NSString *)accessibleSPTMPath { return @""; }
+          - (NSString *)accessibleTXMPath { return @""; }
+          - (void)locateJailbreakRoot {}
+          - (NSError *)ensureJailbreakRootExists { return nil; }
+
+          #pragma mark - State
+
+          - (BOOL)isInstalledThroughTrollStore { return NO; }
+          - (BOOL)isJailbrokenWithOtherJailbreak { return NO; }
+
+          - (BOOL)isJailbroken
+          {
+              long stored = [[[NSUserDefaults standardUserDefaults] objectForKey:kBootTimeKey] longValue];
+              // kern.boottime drifts by a few seconds on iOS, so compare with a margin
+              return stored != 0 && labs(stored - pe_boot_time()) < 120;
+          }
+
+          - (BOOL)isBootstrapped { return [[NSUserDefaults standardUserDefaults] boolForKey:kBootstrappedKey]; }
+          - (NSString *)jailbrokenVersion { return [self isJailbroken] ? [self appVersion] : nil; }
+
+          - (void)setJailbroken:(BOOL)jailbroken withVersion:(NSString *)version
+          {
+              NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+              if (jailbroken) {
+                  [defaults setObject:@(pe_boot_time()) forKey:kBootTimeKey];
+                  [defaults setBool:YES forKey:kBootstrappedKey];
+              }
+              else {
+                  [defaults removeObjectForKey:kBootTimeKey];
+              }
+          }
+
+          #pragma mark - Support
+
+          - (BOOL)isSupported { return YES; }
+
+          - (BOOL)isArm64e
+          {
+              cpu_subtype_t subtype = 0;
+              size_t size = sizeof(subtype);
+              sysctlbyname("hw.cpusubtype", &subtype, &size, NULL, 0);
+              return subtype == CPU_SUBTYPE_ARM64E;
+          }
+
+          - (BOOL)isSPTM { return NO; }
+
+          - (NSString *)versionSupportString
+          {
+              return [self isArm64e] ? @"iOS 16.0 - 27.1 (PPL)" : @"iOS 16.0 - 27.1 (arm64)";
+          }
+
+          - (BOOL)isPACBypassRequired { return [self isArm64e]; }
+          - (BOOL)isPPLBypassRequired { return [self isArm64e]; }
+
+          #pragma mark - Execution
+
+          - (void)runUnsandboxed:(void (^)(void))unsandboxBlock { if (unsandboxBlock) unsandboxBlock(); }
+          - (void)runAsRoot:(void (^)(void))rootBlock { if (rootBlock) rootBlock(); }
+
+          #pragma mark - Actions
+
+          - (void)respring { pe_blackout_and_exit(2.5); }
+          - (void)rebootUserspace { pe_blackout_and_exit(4.0); }
+          - (void)reboot { pe_blackout_and_exit(1.5); }
+          - (void)rebuildIconCache {}
+          - (void)refreshJailbreakApps {}
+          - (void)changeMobilePassword:(NSString *)newPassword {}
+          - (NSError *)updateEnvironment { return nil; }
+          - (void)updateJailbreakFromTIPA:(NSString *)tipaPath {}
+
+          #pragma mark - Toggles
+
+          - (BOOL)isTweakInjectionEnabled
+          {
+              return [[DOPreferenceManager sharedManager] boolPreferenceValueForKey:@"tweakInjectionEnabled" fallback:YES];
+          }
+
+          - (void)setTweakInjectionEnabled:(BOOL)enabled
+          {
+              [[DOPreferenceManager sharedManager] setPreferenceValue:@(enabled) forKey:@"tweakInjectionEnabled"];
+          }
+
+          - (BOOL)isIDownloadEnabled
+          {
+              return [[DOPreferenceManager sharedManager] boolPreferenceValueForKey:@"idownloadEnabled" fallback:NO];
+          }
+
+          - (void)setIDownloadEnabled:(BOOL)enabled needsUnsandbox:(BOOL)needsUnsandbox
+          {
+              [[DOPreferenceManager sharedManager] setPreferenceValue:@(enabled) forKey:@"idownloadEnabled"];
+          }
+
+          - (void)setIDownloadLoaded:(BOOL)loaded needsUnsandbox:(BOOL)needsUnsandbox {}
+          - (BOOL)isFakelibMounted { return NO; }
+          - (int)setFakelibMounted:(BOOL)mounted { return 0; }
+          - (int)setPrivatePrebootProtected:(BOOL)protected { return 0; }
+
+          - (BOOL)isJailbreakHidden
+          {
+              return [[DOPreferenceManager sharedManager] boolPreferenceValueForKey:@"jailbreakHidden" fallback:NO];
+          }
+
+          - (void)setJailbreakHidden:(BOOL)hidden
+          {
+              [[DOPreferenceManager sharedManager] setPreferenceValue:@(hidden) forKey:@"jailbreakHidden"];
+          }
+
+          #pragma mark - Bootstrap
+
+          - (NSError *)prepareBootstrap { return nil; }
+          - (NSError *)finalizeBootstrap { return nil; }
+
+          - (NSError *)deleteBootstrap
+          {
+              NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+              [defaults removeObjectForKey:kBootTimeKey];
+              [defaults removeObjectForKey:kBootstrappedKey];
+              return nil;
+          }
+
+          - (NSError *)reinstallPackageManagers
+          {
+              [NSThread sleepForTimeInterval:1.8];
+              return nil;
+          }
+
+          - (NSError *)updateBootLogo { return nil; }
+
+          @end
+          PE_EOF
+          cat > "$P/Sources/Fake/DOExploit.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Stand-in for Dopamine's DOExploit. A plain record: name, identifier, priority. Loads and runs nothing.
+          #import "DOExploit.h"
+
+          @implementation DOExploit
+
+          - (instancetype)initWithPath:(NSString *)exploitPath info:(NSDictionary *)exploitInfo flavorName:(NSString *)flavorName flavorDictionary:(NSDictionary *)flavorInfo
+          {
+              self = [super init];
+              if (self) {
+                  self.executablePath = exploitPath;
+                  self.flavorName = flavorName;
+                  _flavorInfo = flavorInfo;
+                  _supportLoaded = YES;
+                  _supported = YES;
+              }
+              return self;
+          }
+
+          - (NSString *)displayName { return self.name; }
+          - (BOOL)isSupported { return YES; }
+          - (BOOL)hasRequirement:(NSString *)requirement { return [self.requirements containsObject:requirement]; }
+          - (int)load { return 0; }
+          - (int)run { return 0; }
+          - (int)cleanup { return 0; }
+
+          @end
+          PE_EOF
+          cat > "$P/Sources/Fake/DOExploitManager.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Stand-in for Dopamine's DOExploitManager. Serves a fixed list of named entries for the Settings screen.
+          #import "DOExploitManager.h"
+          #import "DOPreferenceManager.h"
+
+          static DOExploit *pe_entry(NSString *name, NSString *identifier, ExploitType type, uint64_t priority)
+          {
+              DOExploit *exploit = [[DOExploit alloc] initWithPath:@"" info:@{} flavorName:@"" flavorDictionary:@{}];
+              exploit.name = name;
+              exploit.identifier = identifier;
+              exploit.type = type;
+              exploit.priority = priority;
+              exploit.requirements = @[];
+              return exploit;
+          }
+
+          @implementation DOExploitManager
+
+          + (instancetype)sharedManager
+          {
+              static DOExploitManager *manager;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  manager = [[DOExploitManager alloc] init];
+              });
+              return manager;
+          }
+
+          - (instancetype)init
+          {
+              self = [super init];
+              if (self) {
+                  self.allExploits = [NSSet setWithArray:@[
+                      pe_entry(@"Pillowfall", @"pe.pillowfall", EXPLOIT_TYPE_KERNEL, 300),
+                      pe_entry(@"Duvet", @"pe.duvet", EXPLOIT_TYPE_KERNEL, 200),
+                      pe_entry(@"Eiderdown", @"pe.eiderdown", EXPLOIT_TYPE_KERNEL, 100),
+                      pe_entry(@"Fluffer", @"pe.fluffer", EXPLOIT_TYPE_PAC, 200),
+                      pe_entry(@"Cushion", @"pe.cushion", EXPLOIT_TYPE_PPL, 200),
+                  ]];
+                  self.activeExploits = [NSMutableArray new];
+              }
+              return self;
+          }
+
+          - (NSSet<DOExploit *> *)availableExploitsForType:(ExploitType)type
+          {
+              return [self.allExploits objectsPassingTest:^BOOL(DOExploit *exploit, BOOL *stop) {
+                  return exploit.type == type;
+              }];
+          }
+
+          - (DOExploit *)bestForType:(ExploitType)type
+          {
+              DOExploit *best = nil;
+              for (DOExploit *exploit in [self availableExploitsForType:type]) {
+                  if (!best || exploit.priority > best.priority) best = exploit;
+              }
+              return best;
+          }
+
+          - (DOExploit *)chosenForType:(ExploitType)type key:(NSString *)key
+          {
+              NSString *identifier = [[DOPreferenceManager sharedManager] preferenceValueForKey:key];
+              for (DOExploit *exploit in [self availableExploitsForType:type]) {
+                  if ([exploit.identifier isEqualToString:identifier]) return exploit;
+              }
+              return [self bestForType:type];
+          }
+
+          - (DOExploit *)preferredKernelExploit { return [self bestForType:EXPLOIT_TYPE_KERNEL]; }
+          - (DOExploit *)preferredPACBypass { return [self bestForType:EXPLOIT_TYPE_PAC]; }
+          - (DOExploit *)preferredPPLBypass { return [self bestForType:EXPLOIT_TYPE_PPL]; }
+
+          - (DOExploit *)selectedKernelExploit { return [self chosenForType:EXPLOIT_TYPE_KERNEL key:@"selectedKernelExploit"]; }
+          - (DOExploit *)selectedPACBypass { return [self chosenForType:EXPLOIT_TYPE_PAC key:@"selectedPACBypass"]; }
+          - (DOExploit *)selectedPPLBypass { return [self chosenForType:EXPLOIT_TYPE_PPL key:@"selectedPPLBypass"]; }
+
+          - (int)cleanUpExploits { return 0; }
+
+          @end
+          PE_EOF
+          cat > "$P/Sources/Fake/DOBootstrapper.m" <<'PE_EOF'
+          // Objective-C, iOS 15+. Stand-in for Dopamine's DOBootstrapper. No downloads, no filesystem changes.
+          #import "DOBootstrapper.h"
+
+          NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
+
+          @implementation DOBootstrapper
+
+          - (void)prepareBootstrapWithCompletion:(void (^)(NSError *))completion
+          {
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                  completion(nil);
+              });
+          }
+
+          - (NSError *)updateVarJbSymlink { return nil; }
+          - (NSError *)ensurePrivatePrebootIsWritable { return nil; }
+          - (NSError *)installPackageManagers { return nil; }
+          - (NSError *)finalizeBootstrap { return nil; }
+          - (NSError *)deleteBootstrap { return nil; }
+
+          @end
+          PE_EOF
+          cat > "$P/Sources/Shim/libjailbreak/libjailbreak.h" <<'PE_EOF'
+          // C header (iOS 15+). Umbrella shim, mirrors <libjailbreak/libjailbreak.h> from the real tree.
+          #ifndef PE_LIBJAILBREAK_H
+          #define PE_LIBJAILBREAK_H
+
+          #include "util.h"
+
+          #endif
+          PE_EOF
+          cat > "$P/Sources/Shim/libjailbreak/util.h" <<'PE_EOF'
+          // C header (iOS 15+). Shim for libjailbreak so Dopamine's UI sources compile with no jailbreak code behind them.
+          #ifndef PE_LIBJAILBREAK_UTIL_H
+          #define PE_LIBJAILBREAK_UTIL_H
+
+          #include <stdbool.h>
+          #include <stddef.h>
+          #include <stdint.h>
+          #include <stdlib.h>
+
+          #include "info.h"
+          #include "jbclient_xpc.h"
+
+          #define JBROOT_PATH(path) ("/var/jb" path)
+
+          static inline int exec_cmd_trusted(const char *binary, ...)
+          {
+              (void)binary;
+              return 0;
+          }
+
+          #endif
+          PE_EOF
+          cat > "$P/Sources/Shim/libjailbreak/info.h" <<'PE_EOF'
+          // C header (iOS 15+). Shim for libjailbreak system info. Only the field the UI touches exists.
+          #ifndef PE_LIBJAILBREAK_INFO_H
+          #define PE_LIBJAILBREAK_INFO_H
+
+          typedef struct {
+              struct {
+                  char *rootPath;
+              } jailbreakInfo;
+          } PESystemInfo;
+
+          static PESystemInfo gSystemInfo;
+
+          #endif
+          PE_EOF
+          cat > "$P/Sources/Shim/libjailbreak/jbclient_xpc.h" <<'PE_EOF'
+          // C header (iOS 15+). Shim for the jbclient settings calls used by Dopamine's settings screen. Backed by NSUserDefaults in PEShim.m.
+          #ifndef PE_JBCLIENT_XPC_H
+          #define PE_JBCLIENT_XPC_H
+
+          #include <stdbool.h>
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          bool jbclient_jbsettings_get_bool(const char *key);
+          double jbclient_jbsettings_get_double(const char *key);
+          int jbclient_platform_jbsettings_set_bool(const char *key, bool value);
+          int jbclient_platform_jbsettings_set_double(const char *key, double value);
+
+          #ifdef __cplusplus
+          }
+          #endif
+
+          #endif
+          PE_EOF
+
+      - name: Patch and rebrand
+        run: |
+          set -euo pipefail
+          python3 - "$P" <<'PY'
+          # Python 3. Patches the copied Dopamine UI sources: rebrand, cut network/update paths, drop the private LSApplicationProxy use.
+          # Every edit asserts it matched exactly once, so an upstream change fails the build loudly instead of silently skipping.
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          ui = root / "Sources/Real/UI"
+
+
+          def edit(path, fn, label):
+              p = pathlib.Path(path)
+              text = p.read_text(encoding="utf-8")
+              new = fn(text)
+              if new == text:
+                  sys.exit(f"patch failed (no change): {label} in {p}")
+              p.write_text(new, encoding="utf-8")
+              print("patched:", label)
+
+
+          def replace_once(old, new):
+              def fn(text):
+                  if text.count(old) != 1:
+                      sys.exit(f"patch failed: expected 1 match, got {text.count(old)} for {old[:60]!r}")
+                  return text.replace(old, new)
+              return fn
+
+
+          # 1. No GitHub release polling, so no update banner and no calls home
+          def no_releases(text):
+              pattern = re.compile(r"- \(NSArray \*\)getLatestReleases\n\{.*?\n\}\n", re.S)
+              if len(pattern.findall(text)) != 1:
+                  sys.exit("patch failed: getLatestReleases not found exactly once")
+              return pattern.sub("- (NSArray *)getLatestReleases\n{\n    return @[];\n}\n", text)
+
+
+          edit(ui / "DOUIManager.m", no_releases, "disable release polling")
+
+          # 2. Update screen: drop the private LSApplicationProxy header and the TrollStore branch that uses it
+          update_vc = ui / "Update/DOUpdateViewController.m"
+          edit(update_vc, replace_once("#import <CoreServices/LSApplicationProxy.h>\n", ""), "drop LSApplicationProxy import")
+          trollstore_block = """            if ([DOEnvironmentManager sharedManager].isInstalledThroughTrollStore) {
+                          LSApplicationProxy *tsAppProxy = [LSApplicationProxy applicationProxyForIdentifier:@"com.opa334.TrollStore"];
+                          if ([tsAppProxy.claimedURLSchemes containsObject:@"apple-magnifier"]) {
+                              [[UIApplication sharedApplication] openURL:[NSURL URLWithString:[@"apple-magnifier://install?url=" stringByAppendingString:self.lastestDownloadUrl]] options:@{} completionHandler:nil];
+                              return;
+                          }
+                      }
+          """
+          edit(update_vc, replace_once(trollstore_block, ""), "drop TrollStore branch")
+
+          # 3. Branding
+          edit(ui / "Settings/DOCreditsViewController.m",
+               replace_once('@"Dopamine %@ - %@"', '@"Pillow Escape %@ - %@"'), "credits title")
+          edit(ui / "Settings/Credits.plist",
+               replace_once("<string>Dopamine Settings</string>", "<string>Pillow Escape Settings</string>"), "credits plist title")
+          edit(ui / "Themes/Themes.plist",
+               lambda t: t.replace("<string>Dopamine</string>", "<string>Pillow Escape</string>", 1), "default theme name")
+
+          strings = root / "Resources/en.lproj/Localizable.strings"
+
+
+          def strings_fn(text):
+              text = text.replace("Dopamine", "Pillow Escape")
+              text = re.sub(r'"Credits_Made_By" = ".*?";', '"Credits_Made_By" = "UI based on Dopamine by opa334";', text, count=1)
+              text = text.replace("select Sileo", "select Zebra")
+              return text
+
+
+          edit(strings, strings_fn, "localizable strings")
+
+          # 4. Package managers: Zebra and Pillow Package, no Sileo
+          (ui / "PkgManagers/PkgManagers.plist").write_text("""<?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <array>
+          	<dict>
+          		<key>Display Name</key>
+          		<string>Zebra</string>
+          		<key>Key</key>
+          		<string>xyz.willy.Zebra</string>
+          		<key>Icon</key>
+          		<string>Zebra</string>
+          		<key>Package</key>
+          		<string>zebra.deb</string>
+          	</dict>
+          	<dict>
+          		<key>Display Name</key>
+          		<string>Pillow Package</string>
+          		<key>Key</key>
+          		<string>pe.pillowpackage</string>
+          		<key>Icon</key>
+          		<string>Pillow</string>
+          		<key>Package</key>
+          		<string>pillow.deb</string>
+          	</dict>
+          </array>
+          </plist>
+          """, encoding="utf-8")
+          print("patched: package managers")
+          PY
+
+      - name: Generate icons and logos
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pillow
+          "$RUNNER_TEMP/venv/bin/python" - "$P" <<'PY'
+          # Python 3 + Pillow. Replaces Dopamine's branded assets (wordmark, logo, app icons, Sileo icon) with Pillow Escape ones.
+          import json
+          import os
+          import shutil
+          import sys
+
+          from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+          root = sys.argv[1]
+          cat = os.path.join(root, "Assets.xcassets")
+
+          FONT_CANDIDATES = [
+              "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf",
+              "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+              "/System/Library/Fonts/Helvetica.ttc",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+          ]
+
+
+          def font(size):
+              for path in FONT_CANDIDATES:
+                  if os.path.exists(path):
+                      return ImageFont.truetype(path, size)
+              return ImageFont.load_default()
+
+
+          def write_json(path, data):
+              with open(path, "w") as f:
+                  json.dump(data, f, indent=2)
+
+
+          def fresh(path):
+              shutil.rmtree(path, ignore_errors=True)
+              os.makedirs(path)
+              return path
+
+
+          def gradient(size, top, bottom):
+              img = Image.new("RGB", (size, size))
+              px = img.load()
+              for y in range(size):
+                  t = y / (size - 1)
+                  c = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+                  for x in range(size):
+                      px[x, y] = c
+              return img
+
+
+          def pillow_glyph(draw, s, fill=(250, 246, 255, 255), edge=(215, 200, 245, 255), face=(70, 40, 120, 255)):
+              # body, inner stitch, pinched corners, sleepy eyes; coordinates are fractions of a 1024 canvas
+              k = s / 1024.0
+              draw.rounded_rectangle((170 * k, 300 * k, 854 * k, 700 * k), radius=160 * k, fill=fill)
+              draw.rounded_rectangle((200 * k, 330 * k, 824 * k, 670 * k), radius=130 * k, outline=edge, width=max(2, int(8 * k)))
+              for cx, cy in ((190, 320), (834, 320), (190, 680), (834, 680)):
+                  draw.ellipse(((cx - 28) * k, (cy - 28) * k, (cx + 28) * k, (cy + 28) * k), fill=edge)
+              draw.arc((360 * k, 440 * k, 460 * k, 520 * k), 20, 160, fill=face, width=max(2, int(12 * k)))
+              draw.arc((564 * k, 440 * k, 664 * k, 520 * k), 20, 160, fill=face, width=max(2, int(12 * k)))
+
+
+          def icon(size, top, bottom):
+              base = gradient(size, top, bottom).convert("RGBA")
+              shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+              k = size / 1024.0
+              ImageDraw.Draw(shadow).rounded_rectangle((190 * k, 330 * k, 834 * k, 730 * k), radius=150 * k, fill=(0, 0, 0, 120))
+              base = Image.alpha_composite(base, shadow.filter(ImageFilter.GaussianBlur(28 * k)))
+              pillow_glyph(ImageDraw.Draw(base), size)
+              return base.convert("RGB")
+
+
+          # App icons: default plus the four alternates Dopamine's theme picker switches between
+          palettes = {
+              "AppIcon": ((120, 80, 230), (40, 20, 90)),
+              "AppIcon_Blue": ((70, 140, 245), (15, 40, 110)),
+              "AppIcon_Purple": ((170, 90, 235), (60, 20, 100)),
+              "AppIcon_Red": ((240, 90, 100), (100, 20, 40)),
+              "AppIcon_ElleKit": ((150, 60, 190), (50, 15, 80)),
+          }
+          for name in os.listdir(cat):
+              if name.startswith("AppIcon") and name.endswith(".appiconset"):
+                  shutil.rmtree(os.path.join(cat, name))
+          for name, (top, bottom) in palettes.items():
+              d = fresh(os.path.join(cat, name + ".appiconset"))
+              icon(1024, top, bottom).save(os.path.join(d, "icon.png"))
+              write_json(os.path.join(d, "Contents.json"), {
+                  "images": [{"filename": "icon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
+                  "info": {"author": "xcode", "version": 1},
+              })
+
+          # Header wordmark, drawn at 1x/2x/3x. The asset keeps the name "Dopamine" because the UI code looks it up by that name.
+          d = fresh(os.path.join(cat, "Dopamine.imageset"))
+          images = []
+          for scale in (1, 2, 3):
+              w, h = 260 * scale, 40 * scale
+              img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+              ImageDraw.Draw(img).text((0, h // 2), "Pillow Escape", font=font(int(h * 0.82)), fill=(255, 255, 255, 255), anchor="lm")
+              fname = "Dopamine.png" if scale == 1 else f"Dopamine@{scale}x.png"
+              img.save(os.path.join(d, fname))
+              images.append({"filename": fname, "idiom": "universal", "scale": f"{scale}x"})
+          write_json(os.path.join(d, "Contents.json"), {"images": images, "info": {"author": "xcode", "version": 1}})
+
+          # Centre mark used when rendering a boot logo
+          d = fresh(os.path.join(cat, "DopamineLogo.imageset"))
+          mark = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+          pillow_glyph(ImageDraw.Draw(mark), 1024)
+          mark.save(os.path.join(d, "DopamineLogo.png"))
+          write_json(os.path.join(d, "Contents.json"), {
+              "images": [{"filename": "DopamineLogo.png", "idiom": "universal"}],
+              "info": {"author": "xcode", "version": 1},
+          })
+
+          # Package manager icons: drop Sileo, add Pillow (same 167px @2x layout as the Zebra one)
+          shutil.rmtree(os.path.join(cat, "Package Managers", "Sileo.imageset"), ignore_errors=True)
+          d = fresh(os.path.join(cat, "Package Managers", "Pillow.imageset"))
+          icon(167, (120, 80, 230), (40, 20, 90)).save(os.path.join(d, "icon_83.5@2x.png"))
+          write_json(os.path.join(d, "Contents.json"), {
+              "images": [{"filename": "icon_83.5@2x.png", "idiom": "universal", "scale": "2x"}],
+              "info": {"author": "xcode", "version": 1},
+          })
+          print("assets generated")
+          PY
+
+      - name: Preflight check that every import resolves
+        run: |
+          set -euo pipefail
+          python3 - "$P" <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          have = {p.name for p in (root / "Sources").rglob("*") if p.is_file()}
+          shim = {"libjailbreak/" + p.name for p in (root / "Sources/Shim/libjailbreak").iterdir()}
+          sdk = ("UIKit", "Foundation", "CoreGraphics", "CoreImage", "ImageIO", "MobileCoreServices", "Photos", "LocalAuthentication",
+                 "Preferences", "objc", "pthread", "sys", "mach", "xpc", "dispatch", "QuartzCore", "CoreServices", "AVFoundation")
+          missing = []
+          for p in (root / "Sources").rglob("*"):
+              if p.suffix not in (".m", ".h"):
+                  continue
+              for m in re.finditer(r'^\s*#\s*import\s+([<"])([^>"]+)[>"]', p.read_text(errors="ignore"), re.M):
+                  kind, target = m.groups()
+                  base = target.split("/")[-1]
+                  if kind == "<":
+                      if target.startswith("libjailbreak/") and target not in shim:
+                          missing.append((p.name, target))
+                      elif target.startswith("pthread.h") or target.split("/")[0] in sdk or target.endswith(".h") and "/" not in target:
+                          continue
+                  elif base not in have:
+                      missing.append((p.name, target))
+          for item in missing:
+              print("unresolved import:", item)
+          sys.exit(1 if missing else 0)
+          PY
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd "$P"
+          cat > "project.yml" <<'PE_EOF'
+          name: PillowEscape
+          options:
+            createIntermediateGroups: true
+            deploymentTarget:
+              iOS: "15.0"
+          settings:
+            base:
+              SDKROOT: iphoneos
+              CLANG_ENABLE_OBJC_ARC: YES
+              GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+              ENABLE_BITCODE: NO
+              ARCHS: arm64
+              ONLY_ACTIVE_ARCH: NO
+          targets:
+            PillowEscape:
+              type: application
+              platform: iOS
+              sources:
+                - path: Sources
+                - path: Resources
+                - path: Assets.xcassets
+              dependencies:
+                - sdk: Photos.framework
+                - sdk: LocalAuthentication.framework
+                - sdk: CoreImage.framework
+                - sdk: ImageIO.framework
+                - sdk: MobileCoreServices.framework
+                - sdk: QuartzCore.framework
+              info:
+                path: Info.plist
+                properties:
+                  CFBundleDisplayName: Pillow Escape
+                  CFBundleShortVersionString: "1.0"
+                  CFBundleVersion: "1"
+                  UILaunchScreen: {}
+                  UIUserInterfaceStyle: Dark
+                  UIViewControllerBasedStatusBarAppearance: true
+                  UIStatusBarStyle: UIStatusBarStyleLightContent
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                  UISupportedInterfaceOrientations~ipad:
+                    - UIInterfaceOrientationPortrait
+                    - UIInterfaceOrientationPortraitUpsideDown
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+                  NSPhotoLibraryUsageDescription: Used to pick a custom boot logo.
+                  NSFaceIDUsageDescription: Authentication is required to change your password.
+                  UIApplicationSceneManifest:
+                    UIApplicationSupportsMultipleScenes: false
+                    UISceneConfigurations:
+                      UIWindowSceneSessionRoleApplication:
+                        - UISceneConfigurationName: Default Configuration
+                          UISceneDelegateClassName: DOSceneDelegate
+              settings:
+                base:
+                  PRODUCT_NAME: PillowEscape
+                  PRODUCT_BUNDLE_IDENTIFIER: com.pillowescape.app
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                  ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIcon_ElleKit AppIcon_Red AppIcon_Purple AppIcon_Blue
+                  HEADER_SEARCH_PATHS:
+                    - $(SRCROOT)/Sources/Shim
+                    - $(SRCROOT)/Sources/**
+                  FRAMEWORK_SEARCH_PATHS:
+                    - $(SRCROOT)/Frameworks
+                  OTHER_LDFLAGS:
+                    - -framework
+                    - Preferences
+                  CODE_SIGNING_ALLOWED: NO
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGN_IDENTITY: ""
+          PE_EOF
+          xcodegen generate
+
+      - name: Build (unsigned, iphoneos)
+        run: |
+          set -euo pipefail
+          cd "$P"
+          xcodebuild -project PillowEscape.xcodeproj -scheme PillowEscape -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          cd "$P"
+          rm -rf Payload && mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/PillowEscape.app Payload/
+          zip -qry PillowEscape.ipa Payload
+          cp PillowEscape.ipa PillowEscape.tipa
+          ls -la PillowEscape.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PillowEscape
+          path: |
+            PillowEscape/PillowEscape.ipa
+            PillowEscape/PillowEscape.tipa
