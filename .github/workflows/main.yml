@@ -1,0 +1,218 @@
+
+name: PAY-LAUNCH | Automated PS4 Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pay-launch-build
+  cancel-in-progress: true
+
+env:
+  TITLE: PAY-LAUNCH
+  TITLE_ID: PAYL00001
+  VERSION: "01.00"
+  CONTENT_ID: IV0000-PAYL00001_00-PAYLAUNCHAPP0001
+  TOOLCHAIN: openorbisofficial/toolchain:v0.5.1
+
+jobs:
+  build:
+    name: Generate and Build PAY-LAUNCH
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Validate application source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for f in Makefile src/main.cpp tools/make_icon.py; do
+            test -s "$f" || {
+              echo "::error::Missing $f"
+              exit 1
+            }
+          done
+
+          grep -Fq 'TITLE_ID := PAYL00001' Makefile
+          grep -Fq 'VERSION := 01.00' Makefile
+
+          echo "PAY-LAUNCH source verified."
+
+      - name: Install asset generation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3 \
+            python3-pil \
+            fonts-dejavu-core \
+            file
+
+      - name: Generate application assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sce_sys assets build-artifacts
+
+          # Generate the PAY-LAUNCH icon.
+          python3 tools/make_icon.py
+
+          # Generate the application font asset.
+          cp \
+            /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+            assets/DejaVuSans.ttf
+
+          test -s sce_sys/icon0.png
+          test -s assets/DejaVuSans.ttf
+
+          file sce_sys/icon0.png
+          file assets/DejaVuSans.ttf
+
+      - name: Obtain OpenOrbis toolchain
+        run: |
+          docker pull "$TOOLCHAIN"
+
+      - name: Inspect SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm "$TOOLCHAIN" bash -euc '
+            : "${OO_PS4_TOOLCHAIN:?Missing SDK environment}"
+
+            echo "SDK: $OO_PS4_TOOLCHAIN"
+
+            test -f "$OO_PS4_TOOLCHAIN/link.x"
+            test -f "$OO_PS4_TOOLCHAIN/lib/crt1.o"
+
+            test -f "$OO_PS4_TOOLCHAIN/include/SDL2/SDL.h"
+            test -f "$OO_PS4_TOOLCHAIN/include/freetype2/ft2build.h"
+            test -f "$OO_PS4_TOOLCHAIN/include/orbis/Sysmodule.h"
+
+            test -x "$OO_PS4_TOOLCHAIN/bin/linux/PkgTool.Core"
+            test -x "$OO_PS4_TOOLCHAIN/bin/linux/create-fself"
+            test -x "$OO_PS4_TOOLCHAIN/bin/linux/create-gp4"
+
+            command -v clang++
+            command -v ld.lld
+            command -v make
+
+            echo "SDK inspection passed."
+          '
+
+      - name: Generate build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > build-artifacts/manifest.txt <<EOF
+          Application: PAY-LAUNCH
+          Platform: PlayStation 4
+          Title ID: PAYL00001
+          Version: 01.00
+          Content ID: IV0000-PAYL00001_00-PAYLAUNCHAPP0001
+          Resolution: 1920x1080
+          Payload execution: Disabled
+          Commit: $GITHUB_SHA
+          Build date: $(date -u +%FT%TZ)
+          Toolchain: $TOOLCHAIN
+          EOF
+
+      - name: Compile and package application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --user 0:0 \
+            -w /workspace \
+            -v "$PWD:/workspace" \
+            "$TOOLCHAIN" \
+            bash -euc '
+              set -o pipefail
+
+              echo "================================"
+              echo "PAY-LAUNCH NATIVE BUILD"
+              echo "================================"
+
+              echo "Cleaning previous output..."
+              make clean
+
+              echo "Compiling application..."
+              make all 2>&1 | tee build.log
+
+              echo "Checking generated package..."
+              find . -maxdepth 1 -name "*.pkg" -type f
+
+              echo "Native build completed."
+            '
+
+      - name: Verify package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -d '' packages < <(
+            find . -maxdepth 1 -type f \
+              -name "${CONTENT_ID}.pkg" -print0
+          )
+
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one genuine package."
+            exit 1
+          fi
+
+          PKG="${packages[0]}"
+
+          test -s "$PKG"
+
+          SIZE=$(stat -c '%s' "$PKG")
+
+          if [[ "$SIZE" -lt 1024 ]]; then
+            echo "::error::Package is too small."
+            exit 1
+          fi
+
+          MAGIC=$(od -An -tx1 -N4 "$PKG" | tr -d ' \n')
+
+          if [[ "$MAGIC" != "7f434e54" ]]; then
+            echo "::error::Invalid PS4 PKG header."
+            exit 1
+          fi
+
+          cp "$PKG" PAY-LAUNCH-PS4.pkg
+
+          sha256sum PAY-LAUNCH-PS4.pkg \
+            > build-artifacts/package-sha256.txt
+
+          echo "Verified package: PAY-LAUNCH-PS4.pkg"
+          echo "Size: $SIZE bytes"
+
+      - name: Upload PS4 application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: PAY-LAUNCH-PS4-PKG
+          path: PAY-LAUNCH-PS4.pkg
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: PAY-LAUNCH-BUILD-REPORT
+          path: |
+            build.log
+            build-artifacts/
+          if-no-files-found: warn
+          retention-days: 30
