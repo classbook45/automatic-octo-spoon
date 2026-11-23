@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install icon and font dependencies
@@ -23,7 +24,7 @@ jobs:
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf assets/DejaVuSans.ttf
       - name: Build with official OpenOrbis container
         run: |
-          docker run --rm --user "$(id -u):$(id -g)" -w /workspace -v "$PWD:/workspace" openorbisofficial/toolchain:latest make
+          docker run --rm --user "$(id -u):$(id -g)" -w /workspace -v "$PWD:/workspace" openorbisofficial/toolchain@sha256:f752d09f9d3227c729ee069f29a05450bd8fa4ef5e785c0929ab8479f7dc4e64 make clean all
       - name: Upload PS4 package
         uses: actions/upload-artifact@v4
         with:
