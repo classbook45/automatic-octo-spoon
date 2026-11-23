@@ -3,7 +3,13 @@ VERSION := 01.00
 TITLE_ID := PAYL00001
 CONTENT_ID := IV0000-PAYL00001_00-PAYLAUNCHAPP0001
 TOOLCHAIN := $(OO_PS4_TOOLCHAIN)
+ifeq ($(strip $(TOOLCHAIN)),)
+$(error OO_PS4_TOOLCHAIN is not set; build inside the official OpenOrbis toolchain environment)
+endif
 PKGDIR := $(TOOLCHAIN)/bin/linux
+ifeq ($(wildcard $(PKGDIR)/PkgTool.Core),)
+$(error OpenOrbis package tools not found in $(PKGDIR))
+endif
 INTDIR := build
 LIBS := -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lScePad -lSceSysmodule -lSceFreeType -lSDL2
 CXX := clang++
@@ -26,6 +32,7 @@ eboot.bin: $(INTDIR)/main.o
 	$(PKGDIR)/create-fself -in=$(INTDIR)/paylaunch.elf -out=$(INTDIR)/paylaunch.oelf --eboot "eboot.bin" --paid 0x3800000000000011
 
 sce_sys/param.sfo: Makefile
+	mkdir -p $(dir $@)
 	$(PKGDIR)/PkgTool.Core sfo_new $@
 	$(PKGDIR)/PkgTool.Core sfo_setentry $@ APP_TYPE --type Integer --maxsize 4 --value 1
 	$(PKGDIR)/PkgTool.Core sfo_setentry $@ APP_VER --type Utf8 --maxsize 8 --value '$(VERSION)'
