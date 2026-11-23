@@ -1,0 +1,42 @@
+name: Build PAY-LAUNCH PS4 PKG
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make python3-pil fonts-dejavu-core libicu-dev
+      - name: Generate icon and stage font
+        run: |
+          mkdir -p sce_sys/about assets
+          python3 tools/make_icon.py
+          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf assets/DejaVuSans.ttf
+      - name: Build with OpenOrbis
+        uses: OpenOrbis/toolchain-action@main
+        with:
+          version: v0.5.4
+          command: |
+            mkdir -p sce_sys/about
+            RIGHT_SPRX="$(find "$OO_PS4_TOOLCHAIN" -name right.sprx | head -1)"
+            test -n "$RIGHT_SPRX"
+            cp "$RIGHT_SPRX" sce_sys/about/right.sprx
+            make
+      - name: Upload PS4 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PAY-LAUNCH-PS4-PKG
+          path: |
+            *.pkg
+            eboot.bin
+          if-no-files-found: error
+          retention-days: 30

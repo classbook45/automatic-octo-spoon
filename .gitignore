@@ -1,0 +1,9 @@
+build/
+*.pkg
+*.o
+*.elf
+*.oelf
+eboot.bin
+pkg.gp4
+sce_sys/param.sfo
+assets/DejaVuSans.ttf
