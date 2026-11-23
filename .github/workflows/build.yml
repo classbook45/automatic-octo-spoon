@@ -15,27 +15,75 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      TITLE: PAY-LAUNCH
+      TITLE_ID: PAYL00001
+      VERSION: "01.00"
+      CONTENT_ID: IV0000-PAYL00001_00-PAYLAUNCHAPP0001
+      TOOLCHAIN: openorbisofficial/toolchain:v0.5.1
+
     steps:
-      - uses: actions/checkout@v7
-      - name: Install icon and font dependencies
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install asset-generation dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pil fonts-dejavu-core
-      - name: Generate app icon and stage font
+          sudo apt-get install -y python3 python3-pil fonts-dejavu-core file
+
+      - name: Generate app assets
         run: |
-          mkdir -p sce_sys assets
+          set -euo pipefail
+          mkdir -p sce_sys assets build-artifacts
           python3 tools/make_icon.py
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf assets/DejaVuSans.ttf
-      - name: Build with official OpenOrbis container
+          test -s sce_sys/icon0.png
+          test -s assets/DejaVuSans.ttf
+          file sce_sys/icon0.png assets/DejaVuSans.ttf
+
+      - name: Download OpenOrbis toolchain
+        run: docker pull "$TOOLCHAIN"
+
+      - name: Compile and create PS4 package
+        shell: bash
         run: |
-          docker run --rm --user "$(id -u):$(id -g)" -w /workspace -v "$PWD:/workspace" openorbisofficial/toolchain@sha256:f752d09f9d3227c729ee069f29a05450bd8fa4ef5e785c0929ab8479f7dc4e64 make clean all
+          set -euo pipefail
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            "$TOOLCHAIN" \
+            bash -euc 'set -o pipefail; make clean all 2>&1 | tee build.log'
+
+      - name: Verify generated package
+        run: |
+          set -euo pipefail
+          PACKAGE="$CONTENT_ID.pkg"
+          test -s "$PACKAGE"
+          test -s eboot.bin
+          file "$PACKAGE" eboot.bin
+          echo "Package size: $(stat -c%s "$PACKAGE") bytes"
+          sha256sum "$PACKAGE" | tee build-artifacts/SHA256SUMS
+          cp "$PACKAGE" build-artifacts/PAY-LAUNCH-PS4.pkg
+          cp eboot.bin build-artifacts/eboot.bin
+
       - name: Upload PS4 package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: PAY-LAUNCH-PS4-PKG
           path: |
-            *.pkg
-            eboot.bin
+            build-artifacts/PAY-LAUNCH-PS4.pkg
+            build-artifacts/eboot.bin
+            build-artifacts/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PAY-LAUNCH-BUILD-LOG
+          path: build.log
+          if-no-files-found: warn
+          retention-days: 14
