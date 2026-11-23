@@ -5,7 +5,7 @@ A controller-first PS4 homebrew dashboard built with the OpenOrbis toolchain.
 ## Features
 - Dark XMB-inspired interface
 - Overview, payload catalogue, console diagnostics, activity log, and settings
-- D-pad / left-stick navigation, X to select, O to return
+- D-pad / left-stick navigation, L1 / R1 to switch sections, X to select, O to return
 - GitHub Actions workflow builds a PS4 PKG and uploads it as an artifact
 
 ## Scope
