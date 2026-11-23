@@ -14,7 +14,7 @@ INTDIR := build
 LIBS := -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lScePad -lSceSysmodule -lSceFreeType -lSDL2
 CXX := clang++
 LD := ld.lld
-CXXFLAGS := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -O2 -c -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -isystem $(TOOLCHAIN)/include/c++/v1 -I$(TOOLCHAIN)/include/SDL2 -I$(TOOLCHAIN)/include/freetype2
+CXXFLAGS := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -O2 -c -isysroot $(TOOLCHAIN) -I$(TOOLCHAIN)/include/orbis -isystem $(TOOLCHAIN)/include -isystem $(TOOLCHAIN)/include/c++/v1 -I$(TOOLCHAIN)/include/SDL2 -I$(TOOLCHAIN)/include/freetype2
 LDFLAGS := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 ASSETS := $(shell find assets -type f 2>/dev/null | LC_ALL=C sort)
 LIBMODULES := $(wildcard sce_module/*)
