@@ -59,7 +59,7 @@ static void draw(){
  txt("NAVIGATION",48,132,14,col(92,124,151));
  for(int i=0;i<5;i++){int y=188+i*82;if(page==i){rect(26,y-12,292,58,col(18,49,75));rect(26,y-12,4,58,blue());edge(26,y-12,292,58,col(37,89,128));}
   txt(nav[i],56,y,18,page==i?col(245,250,255):col(140,162,183));}
- txt("BUILD",48,684,13,col(92,124,151));txt("PAY-LAUNCH  0.1.0",48,716,15,col(179,201,219));
+ txt("BUILD",48,684,13,col(92,124,151));txt("PAY-LAUNCH  01.00",48,716,15,col(179,201,219));
  txt("OPENORBIS TARGET",48,754,13,col(92,124,151));txt("PS4 HOME BREW",48,782,14,col(179,201,219));
  txt("L1 / R1: SWITCH SECTION",48,830,12,col(92,124,151));
  if(page==0){
@@ -74,7 +74,7 @@ static void draw(){
   txt("QUICK ACCESS",400,590,17,col(214,229,243));
   const char *labels[]={"PAYLOAD LIBRARY","CONSOLE INFO","ACTIVITY LOG"};
   const char *desc[]={"Browse the local catalogue","View app-side status","See recent app messages"};
-  for(int i=0;i<3;i++){int x=400+i*490;panel(x,636,450,190);txt(labels[i],x+26,674,18,col(238,247,255));txt(desc[i],x+26,720,15,col(130,158,183));txt("OPEN  >",x+26,778,15,blue());}
+  for(int i=0;i<3;i++){int x=400+i*490;panel(x,636,450,190);txt(labels[i],x+26,674,18,col(238,247,255));txt(desc[i],x+26,720,15,col(130,158,183));txt("L1 / R1 TO OPEN",x+26,778,15,blue());}
  }else if(page==1){
   txt("PAYLOAD LIBRARY",400,134,30,col(244,249,255));txt("Catalogue entries for common homebrew tools.",404,180,17,col(128,155,179));
   panel(400,224,840,730);txt("AVAILABLE ENTRIES",434,260,15,col(111,144,173));
@@ -96,8 +96,9 @@ static void draw(){
  }else if(page==3){
   txt("ACTIVITY LOG",400,134,30,col(244,249,255));txt("Session messages and app status.",404,180,17,col(128,155,179));panel(400,235,1435,620);
   const char *logs[]={"PAY-LAUNCH interface initialized","Local catalogue loaded","Payload execution disabled in this build","Controller input ready when connected","No network requests made"};
-  txt("TIME",444,280,13,col(103,135,163));txt("EVENT",650,280,13,col(103,135,163));
-  for(int i=0;i<5;i++){char t[16];snprintf(t,sizeof(t),"00:%02d",i*3+1);int y=340+i*86;txt(t,444,y,15,col(107,138,165));txt(logs[i],650,y,16,col(211,226,239));}
+  txt("SAMPLE EVENTS",444,280,13,col(103,135,163));
+  for(int i=0;i<5;i++){int y=340+i*86;txt("DEMO",444,y,15,col(107,138,165));txt(logs[i],650,y,16,col(211,226,239));}
+  txt("STATIC DEMO DATA - NOT A PERSISTENT SYSTEM LOG",444,790,13,col(255,190,105));
  }else{
   txt("SETTINGS",400,134,30,col(244,249,255));txt("Application preferences.",404,180,17,col(128,155,179));panel(400,235,1435,620);
   txt("APPEARANCE",444,280,16,col(111,144,173));txt("Accent color",444,350,18,col(224,236,246));rect(810,340,42,24,blue());txt(accent?"VIOLET":"BLUE",878,344,15,col(183,202,220));
