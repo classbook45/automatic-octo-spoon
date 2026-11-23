@@ -2,7 +2,12 @@ name: Build PAY-LAUNCH PS4 PKG
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: pay-launch-build
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,7 +17,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install icon and font dependencies
         run: |
           sudo apt-get update
@@ -26,7 +31,7 @@ jobs:
         run: |
           docker run --rm --user "$(id -u):$(id -g)" -w /workspace -v "$PWD:/workspace" openorbisofficial/toolchain@sha256:f752d09f9d3227c729ee069f29a05450bd8fa4ef5e785c0929ab8479f7dc4e64 make clean all
       - name: Upload PS4 package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: PAY-LAUNCH-PS4-PKG
           path: |
