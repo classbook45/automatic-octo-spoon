@@ -1,5 +1,6 @@
 #include <SDL.h>
-#include <_types/sysmodule.h>
+#include <stdint.h>
+enum OrbisSysModule : uint16_t;
 #include <orbis/Sysmodule.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -123,7 +124,7 @@ static void event(SDL_Event *e){
 int main(int argc,char **argv){
  (void)argc;(void)argv;setvbuf(stdout,NULL,_IONBF,0);
  if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_JOYSTICK)!=0)return 1;
- sceSysmoduleLoadModule(ORBIS_SYSMODULE_FREETYPE_OL);
+ sceSysmoduleLoadModule(static_cast<enum OrbisSysModule>(0x009A));
  if(FT_Init_FreeType(&ft)!=0)return 2;
  if(FT_New_Face(ft,"/app0/assets/DejaVuSans.ttf",0,&face)!=0)return 3;
  win=SDL_CreateWindow("PAY-LAUNCH",SDL_WINDOWPOS_UNDEFINED,SDL_WINDOWPOS_UNDEFINED,W,H,SDL_WINDOW_SHOWN);if(!win)return 4;
