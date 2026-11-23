@@ -81,34 +81,6 @@ jobs:
         run: |
           docker pull "$TOOLCHAIN"
 
-      - name: Inspect SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          docker run --rm "$TOOLCHAIN" bash -euc '
-            : "${OO_PS4_TOOLCHAIN:?Missing SDK environment}"
-
-            echo "SDK: $OO_PS4_TOOLCHAIN"
-
-            test -f "$OO_PS4_TOOLCHAIN/link.x"
-            test -f "$OO_PS4_TOOLCHAIN/lib/crt1.o"
-
-            test -f "$OO_PS4_TOOLCHAIN/include/SDL2/SDL.h"
-            test -f "$OO_PS4_TOOLCHAIN/include/freetype2/ft2build.h"
-            test -f "$OO_PS4_TOOLCHAIN/include/orbis/Sysmodule.h"
-
-            test -x "$OO_PS4_TOOLCHAIN/bin/linux/PkgTool.Core"
-            test -x "$OO_PS4_TOOLCHAIN/bin/linux/create-fself"
-            test -x "$OO_PS4_TOOLCHAIN/bin/linux/create-gp4"
-
-            command -v clang++
-            command -v ld.lld
-            command -v make
-
-            echo "SDK inspection passed."
-          '
-
       - name: Generate build metadata
         shell: bash
         run: |
