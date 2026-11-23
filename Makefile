@@ -7,11 +7,11 @@ ifeq ($(strip $(TOOLCHAIN)),)
 $(error OO_PS4_TOOLCHAIN is not set; build inside the official OpenOrbis toolchain environment)
 endif
 PKGDIR := $(TOOLCHAIN)/bin/linux
-ifeq ($(wildcard $(PKGDIR)/PkgTool.Core),)
+ifeq ($(wildcard $(PKGDIR)/PkgTool.Core $(PKGDIR)/create-fself $(PKGDIR)/create-gp4),)
 $(error OpenOrbis package tools not found in $(PKGDIR))
 endif
 INTDIR := build
-LIBS := -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lScePad -lSceSysmodule -lSceFreeType -lSDL2
+LIBS := -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType -lSDL2
 CXX := clang++
 LD := ld.lld
 CXXFLAGS := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -O2 -c -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -isystem $(TOOLCHAIN)/include/c++/v1 -I$(TOOLCHAIN)/include/SDL2 -I$(TOOLCHAIN)/include/freetype2
