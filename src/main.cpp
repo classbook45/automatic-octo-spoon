@@ -1,6 +1,5 @@
 #include <SDL.h>
 #include <orbis/Sysmodule.h>
-#include <orbis/_types/sysmodule.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include <proto-include.h>
