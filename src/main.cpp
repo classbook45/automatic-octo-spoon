@@ -123,12 +123,15 @@ static void event(SDL_Event *e){
 }
 int main(int argc,char **argv){
  (void)argc;(void)argv;setvbuf(stdout,NULL,_IONBF,0);
- if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_JOYSTICK)!=0)return 1;
- sceSysmoduleLoadModule(static_cast<enum OrbisSysModule>(0x009A));
- if(FT_Init_FreeType(&ft)!=0)return 2;
- if(FT_New_Face(ft,"/app0/assets/DejaVuSans.ttf",0,&face)!=0)return 3;
- win=SDL_CreateWindow("PAY-LAUNCH",SDL_WINDOWPOS_UNDEFINED,SDL_WINDOWPOS_UNDEFINED,W,H,SDL_WINDOW_SHOWN);if(!win)return 4;
- ren=SDL_CreateSoftwareRenderer(SDL_GetWindowSurface(win));if(!ren)return 5;
+ if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_JOYSTICK)!=0){fprintf(stderr,"SDL_Init failed: %s\\n",SDL_GetError());return 1;}
+ int moduleResult=sceSysmoduleLoadModule(static_cast<enum OrbisSysModule>(0x009A));
+ if(moduleResult<0){fprintf(stderr,"FreeType sysmodule load failed: %d\\n",moduleResult);SDL_Quit();return 2;}
+ if(FT_Init_FreeType(&ft)!=0){fprintf(stderr,"FreeType initialization failed\\n");SDL_Quit();return 3;}
+ if(FT_New_Face(ft,"/app0/assets/DejaVuSans.ttf",0,&face)!=0){fprintf(stderr,"Font asset could not be opened\\n");FT_Done_FreeType(ft);SDL_Quit();return 4;}
+ win=SDL_CreateWindow("PAY-LAUNCH",SDL_WINDOWPOS_UNDEFINED,SDL_WINDOWPOS_UNDEFINED,W,H,0);
+ if(!win){fprintf(stderr,"SDL window creation failed: %s\\n",SDL_GetError());FT_Done_Face(face);FT_Done_FreeType(ft);SDL_Quit();return 5;}
+ ren=SDL_CreateSoftwareRenderer(SDL_GetWindowSurface(win));
+ if(!ren){fprintf(stderr,"SDL software renderer creation failed: %s\\n",SDL_GetError());SDL_DestroyWindow(win);FT_Done_Face(face);FT_Done_FreeType(ft);SDL_Quit();return 6;}
  if(SDL_NumJoysticks()>0)pad=SDL_JoystickOpen(0);
  message("WELCOME TO PAY-LAUNCH");
  while(running){SDL_Event e;while(SDL_PollEvent(&e))event(&e);draw();SDL_Delay(16);}
