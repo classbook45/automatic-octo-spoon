@@ -60,7 +60,7 @@ static void draw(){
  for(int i=0;i<5;i++){int y=188+i*82;if(page==i){rect(26,y-12,292,58,col(18,49,75));rect(26,y-12,4,58,blue());edge(26,y-12,292,58,col(37,89,128));}
   txt(nav[i],56,y,18,page==i?col(245,250,255):col(140,162,183));}
  txt("BUILD",48,684,13,col(92,124,151));txt("PAY-LAUNCH  0.1.0",48,716,15,col(179,201,219));
- txt("OPENORBIS TARGET",48,754,13,col(92,124,151));txt("PS4 HOME BREW",48,782,14,col(179,201,219));
+ txt("OPENORBIS TARGET",48,754,13,col(92,124,151));txt("PS4 HOME BREW",48,782,14,col(179,201,219));\n txt("L1 / R1: SWITCH SECTION",48,830,12,col(92,124,151));
  if(page==0){
   txt("OVERVIEW",400,134,30,col(244,249,255));txt("Your console utility hub.",404,180,17,col(128,155,179));
   panel(400,235,1030,300);rect(400,235,6,300,blue());txt("WELCOME BACK",448,276,15,blue());
@@ -85,7 +85,7 @@ static void draw(){
   txt("STATUS",1300,510,13,col(111,144,173));txt("CATALOGUE ONLY",1300,548,18,col(255,190,105));
   rect(1300,630,470,54,col(28,43,60));edge(1300,630,470,54,col(58,80,102));txt("RUN / INSTALL - NOT AVAILABLE",1322,646,14,col(255,190,105));
   txt("No executable payloads are included.",1300,730,14,col(113,143,169));
-  txt("UP / DOWN: BROWSE     X: DETAILS     TRIANGLE: INFO",434,910,13,col(103,132,157));
+  txt("UP / DOWN: BROWSE     X: DETAILS     L1 / R1: SECTION",434,910,13,col(103,132,157));
  }else if(page==2){
   txt("CONSOLE",400,134,30,col(244,249,255));txt("Local application diagnostics.",404,180,17,col(128,155,179));panel(400,235,1435,620);
   const char *a[]={"Platform","Firmware","Display canvas","Network","Controller","Payload execution"};
@@ -105,15 +105,15 @@ static void draw(){
   txt("Network access",444,620,18,col(224,236,246));txt("No requests are made",810,620,16,col(143,216,188));
  }
  if(SDL_GetTicks()<toastEnd){rect(600,990,720,52,col(15,35,53));edge(600,990,720,52,blue());txt(toast,624,1004,15,col(226,239,250));}
- SDL_RenderPresent(ren);SDL_UpdateWindowSurface(win);
+ SDL_UpdateWindowSurface(win);
 }
-static void move(int d){if(page==1){selected=(selected+d+N)%N;}else{page=(page+d+5)%5;}}
+static void move(int d){if(page==1){selected=(selected+d+N)%N;}else{page=(page+d+5)%5;selected=0;}}\nstatic void switchPage(int d){page=(page+d+5)%5;selected=0;message(nav[page]);}
 static void confirm(){if(page==0){page=1;message("PAYLOAD LIBRARY OPENED");}else if(page==4){accent=!accent;message("ACCENT THEME UPDATED");}else if(page==1){message("ENTRY IS INFORMATION ONLY");}else message("SECTION SELECTED");}
 static void event(SDL_Event *e){
  if(e->type==SDL_QUIT)running=0;
- if(e->type==SDL_JOYBUTTONDOWN){if(e->jbutton.button==0)confirm();else if(e->jbutton.button==1){page=0;message("HOME");}else if(e->jbutton.button==3&&page==1)message("NO PAYLOAD WAS EXECUTED");else if(e->jbutton.button==4)move(-1);else if(e->jbutton.button==5)move(1);}
- if(e->type==SDL_JOYAXISMOTION&&SDL_GetTicks()-lastMove>180&&e->jaxis.axis==1){if(e->jaxis.value>18000){move(1);lastMove=SDL_GetTicks();}else if(e->jaxis.value< -18000){move(-1);lastMove=SDL_GetTicks();}}
- if(e->type==SDL_KEYDOWN){if(e->key.keysym.sym==SDLK_ESCAPE)page=0;if(e->key.keysym.sym==SDLK_DOWN)move(1);if(e->key.keysym.sym==SDLK_UP)move(-1);if(e->key.keysym.sym==SDLK_RETURN||e->key.keysym.sym==SDLK_SPACE)confirm();if(e->key.keysym.sym==SDLK_RIGHT&&page==1)selected=(selected+1)%N;if(e->key.keysym.sym==SDLK_LEFT&&page==1)selected=(selected+N-1)%N;}
+ if(e->type==SDL_JOYBUTTONDOWN){if(e->jbutton.button==0)confirm();else if(e->jbutton.button==1){page=0;message("HOME");}else if(e->jbutton.button==3&&page==1)message("NO PAYLOAD WAS EXECUTED");else if(e->jbutton.button==4)switchPage(-1);else if(e->jbutton.button==5)switchPage(1);}
+ if(e->type==SDL_JOYHATMOTION&&SDL_GetTicks()-lastMove>180){if(e->jhat.value&SDL_HAT_DOWN){move(1);lastMove=SDL_GetTicks();}else if(e->jhat.value&SDL_HAT_UP){move(-1);lastMove=SDL_GetTicks();}}\n if(e->type==SDL_JOYAXISMOTION&&SDL_GetTicks()-lastMove>180&&e->jaxis.axis==1){if(e->jaxis.value>18000){move(1);lastMove=SDL_GetTicks();}else if(e->jaxis.value< -18000){move(-1);lastMove=SDL_GetTicks();}}
+ if(e->type==SDL_KEYDOWN){if(e->key.keysym.sym==SDLK_ESCAPE)page=0;if(e->key.keysym.sym==SDLK_DOWN)move(1);if(e->key.keysym.sym==SDLK_UP)move(-1);if(e->key.keysym.sym==SDLK_RETURN||e->key.keysym.sym==SDLK_SPACE)confirm();if(e->key.keysym.sym==SDLK_RIGHT&&page==1)selected=(selected+1)%N;if(e->key.keysym.sym==SDLK_LEFT&&page==1)selected=(selected+N-1)%N;if(e->key.keysym.sym==SDLK_PAGEDOWN)switchPage(1);if(e->key.keysym.sym==SDLK_PAGEUP)switchPage(-1);}
 }
 int main(int argc,char **argv){
  (void)argc;(void)argv;setvbuf(stdout,NULL,_IONBF,0);
